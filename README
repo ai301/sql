@@ -1,0 +1,19 @@
+sql was taken from Chromium's src/app/sql and a few
+addition files were added for compilation
+
+Changes:
+  - Added files that sql depended on
+  - Commented out checks and replaced them with ifs
+  - Removed StringPrintf
+  - Added utility functions for escaping and quoting SQL
+  - Added to sql::Connection BackupTo, BackupTemporaryTo and BackupTableTo
+  - sql::Statement::ColumnString defaults to "" NOT 0, caused error
+  - sql::Connection invalidates all of its StatementsRefs not just cached,
+    this allows statements to be static otherwise an error occured
+  - Added overloads for when a std::string was supplied instead of const char*
+  - Renamed OpenInternal to Open
+  - Made connection and stmt in sql::Connection::StatementRef non-const
+  - Made sql::Statement::GetSQLStatement const
+  - Made Get functions in sql::MetaTable const
+  - sql::MetaTable::DoesTableExist now uses reference not pointer
+  - Added a few sanity checks
