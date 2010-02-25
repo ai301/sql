@@ -32,14 +32,14 @@ bool Transaction::Begin() {
   return is_open_;
 }
 
-void Transaction::Rollback() {
+bool Transaction::Rollback() {
   if (!is_open_) {
     //NOTREACHED() << "Attempting to roll back a nonexistant transaction. "
     //             << "Did you remember to call Begin() and check its return?";
-    return;
+    return false;
   }
-  is_open_ = false;
-  connection_->RollbackTransaction();
+  is_open_ = connection_->RollbackTransaction();
+  return is_open_;
 }
 
 bool Transaction::Commit() {

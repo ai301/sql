@@ -30,6 +30,7 @@ MetaTable::~MetaTable() {
 }
 
 bool MetaTable::Init(Connection* db, int version, int compatible_version) {
+  //DCHECK(!db_ && db);
   if (db_ || !db)
     return false;
 

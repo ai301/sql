@@ -118,7 +118,8 @@ bool Statement::BindCString(int col, const char* val) {
 bool Statement::BindString(int col, const std::string& val) {
   if (is_valid()) {
     int err = CheckError(sqlite3_bind_text(ref_->stmt(), col + 1, val.data(),
-                                           val.size(), SQLITE_TRANSIENT));
+                                           static_cast<int>(val.size()),
+                                           SQLITE_TRANSIENT));
     return err == SQLITE_OK;
   }
   return false;
@@ -214,7 +215,7 @@ const void* Statement::ColumnBlob(int col) const {
 
 void Statement::ColumnBlobAsVector(int col, std::vector<char>* val) const {
   if (!val)
-    return false;
+    return;
 
   val->clear();
   if (!is_valid()) {
@@ -240,9 +241,6 @@ const char* Statement::GetSQLStatement() const {
   // sqlite3_sql is non-mutating, so this cast is OK.
   scoped_refptr<Connection::StatementRef>& stmt_ref =
     *const_cast<scoped_refptr<Connection::StatementRef>*>(&ref_);
-
-  if (!stmt_ref->stmt())
-    return false;
 
   return sqlite3_sql(stmt_ref->stmt());
 }

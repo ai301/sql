@@ -11,7 +11,7 @@
 
 namespace sql {
 
-inline string printf(const std::string& fmt, ...) {
+inline std::string printf(const std::string& fmt, ...) {
   char *tmp;
   std::string msg;
   va_list ap;
@@ -32,7 +32,7 @@ inline string printf(const std::string& fmt, ...) {
  * @param  unescaped the unescaped string
  * @return escaped form of the unescaped string
  */
-inline string escape(const std::string &unescaped) {
+inline std::string escape(const std::string &unescaped) {
   std::string escaped;
   char *tmp;
 
@@ -48,7 +48,7 @@ inline string escape(const std::string &unescaped) {
  * @param  unquoted the unescaped string
  * @return quoted and escaped form of the unquoted string
  */
-inline string quote(const string &unquoted) {
+inline std::string quote(const std::string &unquoted) {
   std::string quoted;
   char *tmp;
 

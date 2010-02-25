@@ -36,8 +36,9 @@ class Transaction {
   bool Begin();
 
   // Rolls back the transaction. This will happen automatically if you do
-  // nothing when the transaction goes out of scope.
-  void Rollback();
+  // nothing when the transaction goes out of scope. This will return false
+  // if sqlite could not rollback.
+  bool Rollback();
 
   // Commits the transaction, returning true on success. This will return
   // false if sqlite could not commit it, or if another transaction in the

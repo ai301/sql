@@ -10,6 +10,8 @@
 
 #include <cstring>
 
+#include <sstream>
+
 #include <sqlite3.h>
 
 #include "statement.h"
@@ -54,8 +56,7 @@ Connection::Connection()
       page_size_(0),
       cache_size_(0),
       exclusive_locking_(false),
-      transaction_nesting_(0),
-      needs_rollback_(false) {
+      transaction_nesting_(0) {
 }
 
 Connection::~Connection() {
@@ -78,24 +79,26 @@ bool Connection::Open(const char* file_name) {
   if (page_size_ != 0) {
     Statement statment(GetUniqueStatement("PRAGMA page_size=%d"));
 
-  if (statment) {
-    statment.BindInt(0, page_size_);
-    if (!statment.Run()) {
+    if (statment) {
+      statment.BindInt(0, page_size_);
+      if (!statment.Run()) {
+          //NOTREACHED() << "Could not set page size";
+      } else {
         //NOTREACHED() << "Could not set page size";
-    } else {
-      //NOTREACHED() << "Could not set page size";
+      }
     }
   }
 
   if (cache_size_ != 0) {
     Statement statment(GetUniqueStatement("PRAGMA cache_size=%d"));
 
-  if (statment) {
-    statment.BindInt(0, cache_size_);
-    if (!statment.Run()) {
+    if (statment) {
+      statment.BindInt(0, cache_size_);
+      if (!statment.Run()) {
+          //NOTREACHED() << "Could not set cache size";
+      } else {
         //NOTREACHED() << "Could not set cache size";
-    } else {
-      //NOTREACHED() << "Could not set cache size";
+      }
     }
   }
 
@@ -109,13 +112,7 @@ bool Connection::Open(const char* file_name) {
 }
 
 void Connection::Close() {
-  if (!open_statements_.empty()) {
-    for (StatementRefSet::iterator i = open_statements_.begin();
-         i != open_statements_.end(); ++i) {
-
-      (*i)->Close();
-    }
-  }
+  ClearCache();
 
   //DCHECK(open_statements_.empty());
 
@@ -126,64 +123,73 @@ void Connection::Close() {
 }
 
 bool Connection::BeginTransaction() {
-  if (needs_rollback_) {
-    //DCHECK(transaction_nesting_ > 0);
-
-    // When we're going to rollback, fail on this begin and don't actually
-    // mark us as entering the nested transaction.
-    return false;
-  }
-
   bool success = true;
-  if (!transaction_nesting_) {
-    needs_rollback_ = false;
+  std::string begin_stmt("SAVEPOINT ");
 
-    Statement begin(GetCachedStatement(SQL_FROM_HERE, "BEGIN TRANSACTION"));
-    if (!begin || !begin.Run())
-      return false;
+  ++transaction_nesting_;
+  begin_stmt.append(SavePointName());
+
+  Statement begin(GetUniqueStatement(begin_stmt));
+  if (!begin || !begin.Run()) {
+    success = false;
+    --transaction_nesting_;
   }
-  transaction_nesting_++;
+
   return success;
 }
 
-void Connection::RollbackTransaction() {
-  if (!transaction_nesting_) {
-    //NOTREACHED() << "Rolling back a nonexistant transaction";
-    return;
-  }
-
-  transaction_nesting_--;
+bool Connection::CommitAllTransactions() {
+  bool success = false;
 
   if (transaction_nesting_ > 0) {
-    // Mark the outermost transaction as needing rollback.
-    needs_rollback_ = true;
-    return;
+    Statement commit(GetCachedStatement(SQL_FROM_HERE, "COMMIT"));
+
+    if (commit && commit.Run()) {
+      success = true;
+      transaction_nesting_ = 0;
+    }
   }
 
-  DoRollback();
+  return success;
 }
 
 bool Connection::CommitTransaction() {
-  if (!transaction_nesting_) {
-    //NOTREACHED() << "Rolling back a nonexistant transaction";
-    return false;
-  }
-  transaction_nesting_--;
+  return ReleaseTransaction();
+}
+
+bool Connection::RollbackTransaction() {
+  bool success = false;
 
   if (transaction_nesting_ > 0) {
-    // Mark any nested transactions as failing after we've already got one.
-    return !needs_rollback_;
+    std::string rollback_to_stmt = "ROLLBACK TO ";
+    rollback_to_stmt.append(SavePointName());
+
+    Statement rollback_to(GetUniqueStatement(rollback_to_stmt));
+
+    if (rollback_to && rollback_to.Run()) {
+      if (!ReleaseTransaction())
+        --transaction_nesting_;
+
+      success = true;
+    }
   }
 
-  if (needs_rollback_) {
-    DoRollback();
-    return false;
+  return success;
+}
+
+bool Connection::RollbackAllTransactions() {
+  bool success = false;
+
+  if (transaction_nesting_ > 0) {
+    Statement rollback(GetCachedStatement(SQL_FROM_HERE, "ROLLBACK"));
+
+    if (rollback && rollback.Run()) {
+      success = true;
+      transaction_nesting_ = 0;
+    }
   }
 
-  Statement commit(GetCachedStatement(SQL_FROM_HERE, "COMMIT"));
-  if (!commit)
-    return false;
-  return commit.Run();
+  return success;
 }
 
 bool Connection::Execute(const char* sql) {
@@ -205,9 +211,10 @@ scoped_refptr<Connection::StatementRef> Connection::GetCachedStatement(
     // one invalidating cached statements, and we'll remove it from the cache
     // if we do that. Make sure we reset it before giving out the cached one in
     // case it still has some stuff bound.
-    //DCHECK(i->second->is_valid());
-    sqlite3_reset(i->second->stmt());
-    return i->second;
+    if (i->second->is_valid()) {
+      sqlite3_reset(i->second->stmt());
+      return i->second;
+    }
   }
 
   scoped_refptr<StatementRef> statement = GetUniqueStatement(sql);
@@ -237,9 +244,18 @@ bool Connection::BackupDatabaseTo(const char* src_db,
     sqlite3_backup* backup = sqlite3_backup_init(conn.db_, dest_db,
         const_cast<sqlite3*>(db_), src_db);
 
-    if (backup && sqlite3_backup_step(backup, -1) == SQLITE_DONE &&
-        sqlite3_backup_finish(backup) == SQLITE_DONE) {
-      success = true;
+    if (backup) {
+      int status;
+
+      do {
+        status = sqlite3_backup_step(backup, -1);
+      } while (status == SQLITE_OK);
+
+      if (status != SQLITE_DONE) {
+        sqlite3_backup_finish(backup);
+      } else {
+        success = sqlite3_backup_finish(backup) == SQLITE_OK;
+      }
     }
   }
 
@@ -249,7 +265,7 @@ bool Connection::BackupDatabaseTo(const char* src_db,
 bool Connection::BackupTo(Connection& conn) const {
   bool success = false;
 
-  if (is_open()) {
+  if (is_open() && conn.is_open()) {
     // Statement is non-mutating, so this cast is OK.
     Statement databases(const_cast<Connection*>(this)->GetUniqueStatement(
       "PRAGMA database_list"));
@@ -257,13 +273,17 @@ bool Connection::BackupTo(Connection& conn) const {
     if (databases) {
       std::string database;
 
-      success = true;
-      while (success && databases.Step()) {
-        // skip the temporary database
-        if (databases.ColumnInt(0) != 1) {
-          database = databases.ColumnString(1);
-          success = BackupDatabaseTo(database, conn, database);
-        }
+      success = databases.Step();
+
+      if (success) {
+        do {
+          // skip the temporary database
+          if (databases.ColumnInt(0) != 1) {
+            database = databases.ColumnString(1);
+            success = BackupDatabaseTo(database, conn, database);
+
+          }
+        } while (success && databases.Step());
       }
     }
   }
@@ -357,15 +377,10 @@ const char* Connection::GetErrorMessage() const {
   return sqlite3_errmsg(db_);
 }
 
-void Connection::DoRollback() {
-  Statement rollback(GetCachedStatement(SQL_FROM_HERE, "ROLLBACK"));
-  if (rollback)
-    rollback.Run();
-}
-
 void Connection::StatementRefCreated(StatementRef* ref) {
-  //DCHECK(open_statements_.find(ref) == open_statements_.end());
-  open_statements_.insert(ref);
+  if (open_statements_.find(ref) == open_statements_.end()) {
+    open_statements_.insert(ref);
+  }
 }
 
 void Connection::StatementRefDeleted(StatementRef* ref) {
@@ -394,6 +409,31 @@ int Connection::OnSqliteError(int err, sql::Statement *stmt) {
   // The default handling is to assert on debug and to ignore on release.
   //NOTREACHED() << GetErrorMessage();
   return err;
+}
+
+bool Connection::ReleaseTransaction() {
+  bool success = false;
+
+  if (transaction_nesting_ > 0) {
+    std::string release_stmt("RELEASE ");
+    release_stmt.append(SavePointName());
+
+    Statement release(GetUniqueStatement(release_stmt));
+
+    if (release && release.Run()) {
+      success = true;
+      --transaction_nesting_;
+    }
+  }
+
+  return success;
+}
+
+std::string Connection::SavePointName() const {
+  std::stringstream savepoint_name;
+  savepoint_name << "'sql_sp_" << transaction_nesting_ << "_'";
+
+  return savepoint_name.str();
 }
 
 }  // namespace sql

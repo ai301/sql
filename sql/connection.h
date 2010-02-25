@@ -175,22 +175,20 @@ class Connection {
 
   // Transactions --------------------------------------------------------------
 
-  // Transaction management. We maintain a virtual transaction stack to emulate
-  // nested transactions since sqlite can't do nested transactions. The
-  // limitation is you can't roll back a sub transaction: if any transaction
-  // fails, all transactions open will also be rolled back. Any nested
-  // transactions after one has rolled back will return fail for Begin(). If
-  // Begin() fails, you must not call Commit or Rollback().
+  // Transaction management.
+  // If Begin fails, you must not call Commit or Rollback.
   //
   // Normally you should use sql::Transaction to manage a transaction, which
   // will scope it to a C++ context.
   bool BeginTransaction();
-  void RollbackTransaction();
   bool CommitTransaction();
+  bool CommitAllTransactions();
+  bool RollbackTransaction();
+  bool RollbackAllTransactions();
 
   // Returns the current transaction nesting, which will be 0 if there are
   // no open transactions.
-  int transaction_nesting() const { return transaction_nesting_; }
+  unsigned int transaction_nesting() const { return transaction_nesting_; }
 
   // Statements ----------------------------------------------------------------
 
@@ -227,8 +225,8 @@ class Connection {
   // you having to manage unique names. See StatementID above for more.
   //
   // Example:
-  //   sql::Statement stmt = connection_.GetCachedStatement(
-  //       SQL_FROM_HERE, "SELECT * FROM foo");
+  //   sql::Statement stmt(connection_.GetCachedStatement(
+  //       SQL_FROM_HERE, "SELECT * FROM foo"));
   //   if (!stmt)
   //     return false;  // Error creating statement.
   scoped_refptr<StatementRef> GetCachedStatement(const StatementID& id,
@@ -284,7 +282,7 @@ class Connection {
   bool DoesColumnExist(const char* table_name, const char* column_name) const;
 
   // See DoesColumnExist for information.
-  bool DoesTableExist(const std::string& table_name,
+  bool DoesColumnExist(const std::string& table_name,
       const std::string &column_name) const {
     return DoesColumnExist(table_name.c_str(), column_name.c_str());
   }
@@ -356,10 +354,6 @@ class Connection {
   };
   friend class StatementRef;
 
-  // Executes a rollback statement, ignoring all transaction state. Used
-  // internally in the transaction management code.
-  void DoRollback();
-
   // Called by a StatementRef when it's being created or destroyed. See
   // open_statements_ below.
   void StatementRefCreated(StatementRef* ref);
@@ -371,6 +365,13 @@ class Connection {
   // Called by Statement objects when an sqlite function returns an error.
   // The return value is the error code reflected back to client code.
   int OnSqliteError(int err, Statement* stmt);
+
+  // Returns the current transaction's save point name in the format
+  // "'sql_sp_{transaction_nesting_}_'"
+  std::string SavePointName() const;
+
+  // Releases/Commits the current transaction.
+  bool ReleaseTransaction();
 
   // The actual sqlite database. Will be NULL before Init has been called or if
   // Init resulted in an error.
@@ -395,12 +396,7 @@ class Connection {
   StatementRefSet open_statements_;
 
   // Number of currently-nested transactions.
-  int transaction_nesting_;
-
-  // True if any of the currently nested transactions have been rolled back.
-  // When we get to the outermost transaction, this will determine if we do
-  // a rollback instead of a commit.
-  bool needs_rollback_;
+  unsigned int transaction_nesting_;
 
   // This object handles errors resulting from all forms of executing sqlite
   // commands or statements. It can be null which means default handling.
